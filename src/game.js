@@ -9,6 +9,8 @@ const canvas = document.getElementById('stage')
 , T_EMPTY = 'empty'
 , T_FLOOR = 'floor'
 , T_WALL = 'wall'
+, T_CDOOR = 'closed_door'
+, T_ODOOR = 'opened_door'
 
 canvas.width = stageW
 canvas.height = stageH
@@ -98,6 +100,85 @@ const listRects = tree => {
     return Array.concat(listRects(tree.left), listRects(tree.right))
 }
 
+const drawRoom = (tileMap, rect) => {
+    const {x: nx, y: ny, w: nw, h: nh} = rect
+    for (let j = ny; j < ny + nh; j++) {
+        for (let i = nx; i < nx + nw; i++) {
+            if (j === ny || j === (ny + nh) - 1) {
+                setTile(tileMap, i, j, T_WALL)
+                continue;
+            }
+            if (i === nx || i === (nx + nw) - 1) {
+                setTile(tileMap, i, j, T_WALL)
+                continue;
+            }
+            setTile(tileMap, i, j, T_FLOOR)
+        }
+    }
+}
+
+const digTunnel = (tileMap, x1, y1, x2, y2) => {
+    const hDir =
+          x1 > x2
+          ? -1
+          : x1 < x2
+          ? 1
+          : 0
+    , vDir =
+          y1 > y2
+          ? -1
+          : y1 < y2
+          ? 1
+          : 0
+    let t;
+    for (let y = y1; y !== y2 + vDir; y += vDir) {
+        t = getTile(tileMap, x1, y)
+        if (t === T_EMPTY)
+            setTile(tileMap, x1, y, T_FLOOR)
+        if (t === T_WALL)
+            setTile(tileMap, x1, y, T_CDOOR)
+    }
+    for (let x = x1; x !== x2 + hDir; x += hDir) {
+        t = getTile(tileMap, x, y1)
+        if (t === T_EMPTY)
+            setTile(tileMap, x, y1, T_FLOOR)
+        if (t === T_WALL)
+            setTile(tileMap, x, y1, T_CDOOR)
+    }
+}
+
+const getFloorTiles = tileMap => {
+    const floorTiles = []
+    for (let j = 0; j < tileMap.h; j++) {
+        for (let i = 0; i < tileMap.w; i++) {
+            if (getTile(tileMap, i, j) === T_FLOOR)
+                floorTiles.push([i, j])
+        }
+    }
+    return floorTiles
+}
+
+const setPlayerStart = tileMap => {
+    const {player} = state
+    , floorTiles = getFloorTiles(tileMap)
+    const [startX, startY] = choose(floorTiles)
+    player.x = startX
+    player.y = startY
+}
+
+const setStairs = tileMap => {
+    const {player} = state
+    const floorTiles = getFloorTiles(tileMap)
+    let n = 100
+    while (n) {
+        const [x, y] = choose(floorTiles)
+        if (player.x !== x && player.y !== y) {
+            tileMap.exit = {x, y}
+        }
+        n--
+    }
+}
+
 const generateLevel = (width, height, depth) => {
     const initRect = Rect(0, 0, width, height)
     , tileMap = TileMap(width, height)
@@ -106,7 +187,7 @@ const generateLevel = (width, height, depth) => {
                 randBetween(0.3, 0.7)]
     })
     , rects = listRects(bspTree)
-    rects.forEach(r => {
+    rects.forEach((r, i) => {
         const {x, y, w, h} = r
         , nx = x + 1
         , ny = y + 1
@@ -116,38 +197,41 @@ const generateLevel = (width, height, depth) => {
             return;
         if (nh <= 2)
             return;
-        for (let j = ny; j < ny + nh; j++) {
-            for (let i = nx; i < nx + nw; i++) {
-                if (j === ny || j === (ny + nh) - 1) {
-                    setTile(tileMap, i, j, T_WALL)
-                    continue;
-                }
-                if (i === nx || i === (nx + nw) - 1) {
-                    setTile(tileMap, i, j, T_WALL)
-                    continue;
-                }
-                setTile(tileMap, i, j, T_FLOOR)
-            }
-        }
+        const nr = rects[(i + 1) % rects.length]
+        drawRoom(tileMap, Rect(nx, ny, nw, nh))
+        digTunnel(tileMap,
+                  nx + Math.floor(nw / 2),
+                  ny + Math.floor(nh / 2),
+                  nr.x + Math.ceil(nr.w / 2),
+                  nr.y + Math.ceil(nr.h / 2))
     })
+    setPlayerStart(tileMap)
+    setStairs(tileMap)
     return tileMap
 }
 
-const init = () => Object.assign(state, {
-    levelMap: generateLevel(35, 25, 3)
-})
+const init = () => {
+    Object.assign(state, {
+        player: {
+            x: 0, y: 0
+        }
+    })
+    Object.assign(state, {
+        levelMap: generateLevel(32, 25, 3)
+    })
+}
 
 const update = dt => {}
 
 const render = () => {
     clr()
-    const {levelMap} = state
+    const {levelMap, player} = state
     // render map
     for (let j = 0; j < levelMap.h; j++) {
         for (let i = 0; i < levelMap.w; i++) {
             switch(getTile(levelMap, i, j)) {
             case T_EMPTY:
-                stage.fillStyle = 'purple'
+                stage.fillStyle = 'black'
                 break;
             case T_FLOOR:
                 stage.fillStyle = 'lightgrey'
@@ -155,10 +239,25 @@ const render = () => {
             case T_WALL:
                 stage.fillStyle = 'grey'
                 break;
+            case T_CDOOR:
+                stage.fillStyle = 'brown'
+                break;
+            case T_ODOOR:
+                stage.fillStyle = 'orange'
+                break;
             default:
-                stage.fillStyle = 'pink'
+                stage.fillStyle = 'black'
             }
             stage.fillRect(i * tileW, j * tileW, tileW, tileW)
+            if (levelMap.exit.x === i && levelMap.exit.y === j) {
+                stage.fillStyle = 'green'
+                stage.fillRect(i * tileW, j * tileW, tileW, tileW)
+            }
+            if (player.x === i && player.y === j) {
+                stage.fillStyle = 'yellow'
+                stage.fillRect(player.x * tileW, player.y * tileW,
+                               tileW, tileW)
+            }
         }
     }
 }
@@ -168,6 +267,50 @@ const loop = dt => {
     render()
     window.requestAnimationFrame(loop)
 }
+
+const movePlayer = (dx, dy) => {
+    const {levelMap, player} = state
+    , {x, y} = player
+    , newX = x + dx
+    , newY = y + dy
+    , t = getTile(levelMap, newX, newY)
+    if (t === T_WALL || t === T_EMPTY) return;
+    if (t === T_CDOOR) {
+        setTile(levelMap, newX, newY, T_ODOOR)
+        return
+    }
+    console.log(levelMap.exit)
+    console.log(newX, newY)
+    if (newX === levelMap.exit.x &&
+        newY === levelMap.exit.y) {
+        Object.assign(state, {
+            levelMap: generateLevel(32, 25, 3)
+        })
+        return;
+    }
+    player.x = newX, player.y = newY
+}
+
+document.addEventListener('keydown', ev => {
+    const {player} = state
+    if (ev.key === 'j') {
+        movePlayer(0, 1)
+    } else if (ev.key === 'k') {
+        movePlayer(0, -1)
+    } else if (ev.key === 'h') {
+        movePlayer(-1, 0)
+    } else if (ev.key === 'l') {
+        movePlayer(1, 0)
+    } else if (ev.key === 'y') {
+        movePlayer(-1, -1)
+    } else if (ev.key === 'u') {
+        movePlayer(1, -1)
+    } else if (ev.key === 'n') {
+        movePlayer(-1, 1)
+    } else if (ev.key === 'm') {
+        movePlayer(1, 1)
+    }
+})
 
 init()
 window.requestAnimationFrame(loop)
